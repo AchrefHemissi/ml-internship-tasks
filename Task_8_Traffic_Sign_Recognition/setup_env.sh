@@ -10,7 +10,7 @@ set -e  # exit immediately on any error
 
 echo ""
 echo "============================================================"
-echo "  Traffic Sign Recognition  —  Environment Setup"
+echo "  Traffic Sign Recognition  —  Environment Setup (pip)"
 echo "============================================================"
 echo ""
 
