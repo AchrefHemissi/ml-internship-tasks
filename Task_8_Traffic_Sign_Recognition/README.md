@@ -32,6 +32,7 @@ Task_8_Traffic_Sign_Recognition/
 │
 ├── models/                         # Saved model checkpoints (auto-created)
 │
+├── RAPPORT.md                      # Full technical report with all findings
 ├── requirements.txt                # Python dependencies
 ├── setup_env.sh                    # One-click Linux / macOS / WSL venv setup script
 └── README.md
@@ -44,8 +45,8 @@ Task_8_Traffic_Sign_Recognition/
 ### 1. Clone the project
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ml-internship-projects.git
-cd ml-internship-projects/Task_8_Traffic_Sign_Recognition
+git clone https://github.com/AchrefHemissi/ml-internship-tasks.git
+cd ml-internship-tasks/Task_8_Traffic_Sign_Recognition
 ```
 
 ### 2. Set up the virtual environment
@@ -87,16 +88,30 @@ Open the notebooks **in order** and select the `traffic-signs` kernel.
 
 ---
 
+## Dataset: GTSRB
+
+| Property | Value |
+|----------|-------|
+| Classes | 43 different traffic signs |
+| Training images | 39,209 |
+| Test images | 12,630 |
+| Image sizes | Variable (15×15 to 250×250 px) |
+| Class imbalance | 210 to 2,250 images per class (ratio ~10.7×) |
+
+The dataset includes CSV files with **bounding box coordinates** (ROI) for each image, used to crop out the sign from its background.
+
+---
+
 ## Notebook Pipeline
 
 | # | Notebook | What it does | Output |
 | --- | --- | --- | --- |
-| 01 | Data Exploration | Inspect CSV files, class counts, raw image sizes | Charts |
-| 02 | Preprocessing | ROI crop → CLAHE → resize (64×64) → normalise; saves arrays | `data/X.npy`, `data/y.npy` |
-| 03 | Data Augmentation | Train/val split; augmentation preview; saves split arrays | `data/X_train.npy` … |
-| 04 | Custom CNN | Build + train 3-block CNN; plot training curves | `models/custom_cnn_final.keras` |
-| 05 | Transfer Learning | MobileNetV2 Phase 1 (frozen base) + Phase 2 (fine-tune) | `models/mobilenet_final.keras` |
-| 06 | Evaluation | Evaluate both models on the **held-out test set**; confusion matrices; classification report; per-class accuracy | Charts / metrics |
+| 01 | Data Exploration | Inspect CSV files, class distribution (43 classes, 10.7× imbalance), raw image sizes (15px to 250px) | Charts |
+| 02 | Preprocessing | ROI crop → CLAHE → resize (64×64) → normalise [0,1]; saves arrays | `data/X.npy`, `data/y.npy` |
+| 03 | Data Augmentation | Stratified 80/20 train/val split (31,367 / 7,842); augmentation preview | `data/X_train.npy`, `data/X_val.npy` … |
+| 04 | Custom CNN | Build 3-block CNN (4.6M params), train with augmentation — **val accuracy 99.90%** | `models/custom_cnn_final.keras` |
+| 05 | Transfer Learning | MobileNetV2 Phase 1 (frozen) + Phase 2 (fine-tune from layer 100) — val accuracy 89.10% | `models/mobilenet_final.keras` |
+| 06 | Evaluation | Test both models on 12,630 held-out images — **Custom CNN 98.75%, MobileNetV2 80.03%** | Confusion matrices, classification reports |
 
 > **Caching**: notebooks 02 and 06 save preprocessed arrays to `data/` on first run and reload instantly on subsequent runs.
 
@@ -104,7 +119,7 @@ Open the notebooks **in order** and select the `traffic-signs` kernel.
 
 ## Architecture
 
-### Custom CNN
+### Custom CNN (98.75% test accuracy)
 
 A 3-block convolutional network trained from scratch:
 
@@ -112,19 +127,35 @@ A 3-block convolutional network trained from scratch:
 Block 1 : Conv(32)  × 2 → BatchNorm → MaxPool → Dropout(0.25)
 Block 2 : Conv(64)  × 2 → BatchNorm → MaxPool → Dropout(0.25)
 Block 3 : Conv(128) × 2 → BatchNorm → MaxPool → Dropout(0.25)
-Head    : Dense(512) → Dense(256) → Dense(43, softmax)
+Head    : Dense(512) → BatchNorm → Dropout(0.5)
+          Dense(256) → BatchNorm → Dropout(0.5)
+          Dense(43, softmax)
 ```
 
-### MobileNetV2 Transfer Learning
+- **4,629,067 parameters** (~17.65 MB)
+- Dense head accounts for ~94% of all parameters
+- Filters double at each block (32→64→128) to capture progressively complex patterns
+
+### MobileNetV2 Transfer Learning (80.03% test accuracy)
 
 Two-phase fine-tuning:
 
-- **Phase 1** — freeze the MobileNetV2 base, train only the classification head (`lr = 1e-3`)
-- **Phase 2** — unfreeze layers from index 100 onwards and fine-tune with a lower learning rate (`lr = 1e-5`)
+- **Phase 1** — freeze the MobileNetV2 base (ImageNet weights), train only the classification head (`lr = 1e-3`)
+- **Phase 2** — unfreeze layers from index 100 onwards, fine-tune with lower learning rate (`lr = 1e-5`)
 
-### Training Callbacks
+**Why it underperforms**: MobileNetV2 was pre-trained on ImageNet (natural photographs). Traffic signs are small, stylized, symbolic images — very different from the source domain. The fine-tuning phase was not long enough to fully adapt.
 
-All training runs use three callbacks (configured in `src/models.py`):
+### Training Configuration
+
+| Parameter | Value |
+| --- | --- |
+| Optimizer | Adam (lr = 1e-3) |
+| Loss | Sparse Categorical Crossentropy |
+| Batch size | 64 |
+| Max epochs | 40 |
+| Train / Val split | 80% / 20% stratified (31,367 / 7,842 images) |
+
+### Callbacks
 
 | Callback | Behaviour |
 | --- | --- |
@@ -134,28 +165,55 @@ All training runs use three callbacks (configured in `src/models.py`):
 
 ---
 
-## Image Preprocessing Pipeline
-
-Each image goes through 5 steps before entering the model:
-
-1. **BGR → RGB** colour conversion
-2. **ROI crop** — bounding box from the CSV removes background clutter
-3. **CLAHE** — contrast enhancement on the L-channel in LAB colour space
-4. **Resize to 64×64** using Lanczos4 interpolation
-5. **Normalise** pixel values to \[0, 1\]
-
----
-
 ## Data Augmentation
 
 Applied on-the-fly during training (never saved to disk):
 
-| Transform | Value |
-| --- | --- |
-| Rotation | ±15° |
-| Width shift | ±10% |
-| Height shift | ±10% |
-| Zoom | ±20% |
+| Transform | Value | Why |
+| --- | --- | --- |
+| Rotation | ±15° | Signs seen at different angles |
+| Width shift | ±10% | Sign off-center in field of view |
+| Height shift | ±10% | Same |
+| Zoom | ±20% | Signs at different distances |
+
+**No horizontal flip** — "Turn right" and "Turn left" are distinct classes; flipping would create false labels.
+
+---
+
+## Results — Detailed
+
+### Custom CNN Test Performance
+
+- **Test accuracy: 98.75%** (12,472 / 12,630 correct)
+- Val/test gap: only 1.15 points → model generalizes well
+- Most classes achieve **F1 = 1.00** (perfect classification)
+
+**Hardest classes** (all low-frequency with visual similarity to other signs):
+
+| Class | F1 | Support | Issue |
+|-------|-----|---------|-------|
+| End of no passing | 0.91 | 60 | Similar to "End of speed limit" |
+| Bumpy road | 0.92 | 120 | Low frequency |
+| End of no passing (>3.5t) | 0.92 | 90 | Similar to base "End of no passing" |
+| No vehicles | 0.93 | 210 | Visual overlap with other circular signs |
+
+### MobileNetV2 Test Performance
+
+- **Test accuracy: 80.03%** — significantly below Custom CNN
+- ImageNet features (edges, textures of natural photos) don't transfer well to symbolic traffic signs
+- Could be improved with extended fine-tuning, wider unfreezing, and domain-specific augmentation
+
+---
+
+## Known Limitations & Possible Improvements
+
+| Limitation | Severity | Fix | Priority |
+| --- | --- | --- | --- |
+| Class imbalance (10.7× ratio) not handled | Low (98.75% achieved) | `class_weight='balanced'` or targeted augmentation | Medium |
+| MobileNetV2 underperforms (80%) | Medium | Extend fine-tuning epochs, unfreeze more layers, cosine decay LR | High |
+| No cross-validation | Medium | Stratified K-Fold (5×) for reliable estimates | Medium |
+| No skip connections in CNN | Low | Add residual connections for deeper variants | Low |
+| Limited augmentation | Low | Add brightness/contrast, Gaussian noise, perspective distortion | Low |
 
 ---
 
@@ -189,6 +247,7 @@ All hyperparameters live in [`src/config.py`](src/config.py) — change them the
 | `LEARNING_RATE` | `1e-3` | Initial Adam learning rate |
 | `VAL_SPLIT` | `0.2` | Fraction reserved for validation |
 | `AUG_ROTATION` | `15` | Max rotation degrees |
+| `NUM_CLASSES` | `43` | Number of traffic sign categories |
 
 ---
 
